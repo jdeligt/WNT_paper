@@ -1,0 +1,1443 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Set working directory
+```{r}
+setwd("/Users/keboo/Documents/WNT manuscript/R and scripts/")
+```
+
+Set project etc
+```{r}
+project <- "WNT_Targets_RNA_Seq"
+metadata <- "metadata_merged.txt"
+title = "2020_dec_analysis"
+comp = "Tissue_Time_" 
+```
+
+
+Load in links to different folders
+```{r}
+ndata_folder <- "ndata_folder/"
+unique_folder <- "unique_folder/"
+resdf_folder <- "resdf_folder/"
+plot_folder <- "plot_folder/"
+```
+
+Install packages
+```{r}
+
+install_everything <- function(x=1){
+  install.packages("dplyr")
+  install.packages("RColorBrewer")
+  install.packages("gplots")
+  install.packages("ggplot2")
+  install.packages("heatmap3")
+  install.packages("tidyverse")
+  install.packages("tidyr")
+  install.packages("pheatmap")
+  install.packages("ggrepel") # ggplot2 addon for better labels
+  install.packages("ggridges")
+  install.packages("readxl")
+  install.packages("pheatmap")
+  install.packages("data.table")
+}
+
+install_everything()
+
+```
+
+Load in libraries
+```{r}
+
+activate_libraries <- function(x=1){
+  library("dplyr")
+  library("RColorBrewer")
+  library("gplots")
+  library("ggplot2")
+  library("heatmap3")
+  library("tidyverse")
+  library("tidyr")
+  library("pheatmap")
+  library("ggrepel") # ggplot2 addon for better labels
+  library("ggridges")
+  library("readxl")
+  library("pheatmap")
+  library("data.table")
+  library("matrixStats")
+  library("Rmisc")
+  library("calibrate")
+  library("gridExtra")
+  library("plotly")
+  library("GGally")
+  library("ggExtra")
+}
+
+activate_libraries()
+
+```
+
+
+Install DESEQ2
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("DESeq2")
+
+library("DESeq2")
+```
+
+
+Install human data
+```{r}
+# Human data
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("org.Hs.eg.db")
+
+install.packages("org.Hs.eg.db")
+library("org.Hs.eg.db")
+
+```
+
+
+```
+Load in data for analysis paper
+
+```{r}
+countData <- read.delim(paste0("WNT_Targets_RNA_Seq_countsTable_of_interest.txt"), header =T)
+
+md <- read.delim(paste0("WNT_Targets_RNA_Seq_md_of_interest.txt"), header =T)
+md$Time <- factor(md$Time)
+md$ind.n <- factor(md$ind.n)
+
+genesymbols <- read.delim("Wnt_Targets_RNA_seq_GeneSymbols.txt", sep = "\t", header = T, row.names=1)
+symbols <- genesymbols[!duplicated(genesymbols$ENSEMBL),]
+rownames(symbols) <- symbols$ENSEMBL
+```
+
+
+
+Generate vectors for easy data handling
+```{r}
+Tissues <- unique(as.character(md$Tissue))
+```
+
+Original dds
+```{r}
+dds <- DESeqDataSetFromMatrix(countData=countsTable[,rownames(md)], colData=md, design= ~ Tissue + Tissue:ind.n + Tissue:Time)
+dds = DESeq(dds)
+resultsNames(dds)
+
+genesymbols <- select(org.Hs.eg.db, rownames(dds), "SYMBOL", "ENSEMBL")
+
+symbols <- genesymbols[!duplicated(genesymbols$ENSEMBL),]
+rownames(symbols) <- symbols$ENSEMBL
+
+rm(countsTable)
+```
+
+Extract resdf data
+```{r}
+dir.create("resdf_folder")
+resdf_folder <- "resdf_folder/"
+
+resdf <- data.frame(row.names=rownames(dds), SYMBOL=symbols$SYMBOL, Mean=results(dds, name="Intercept")$baseMean)
+
+for (tp in c("6","24")) {
+  for (tissue in unique(md$Tissue)) {
+    # TX vs T0 for specific tissue
+    
+    label <- paste0("Tissue",tissue,".Time",tp)
+    print(label)
+    
+    tmp_res <- data.frame(results(dds, name=label))
+    colnames(tmp_res) <- paste(label,colnames(tmp_res),sep="_")
+    
+    resdf <- cbind(resdf, tmp_res[,c(2,3,5,6)])
+  }
+}
+
+write.table(resdf, paste0(resdf_folder, project, "_Tissue_Time_DifferentialExpresison.txt"), sep="\t", row.names=T, col.names=T, quote=F)
+
+```
+
+Extract normalized data
+```{r}
+#Extract matrix of normalised values
+rld <- rlog(dds)
+vsd <- varianceStabilizingTransformation(dds)
+ntd <- normTransform(dds)
+head(assay(rld), 3)
+head(assay(vsd), 3)
+
+
+
+#extract normalised data with these methods
+#csd looks quite normalized
+write.table(assay(rld), paste(title,"rlog.txt"))
+write.table(assay(vsd), paste(title,"vsd.txt"))
+```
+
+Save files
+```{r}
+#Save all files
+
+dir.create("ndata_folder")
+ndata_folder <- "ndata_folder/"
+
+write.table(counts(dds, normalized=T), paste0(ndata_folder, project,"_ReNormalised.txt"), sep="\t", row.names=T, col.names=T, quote=F)
+write.table(counts(dds, normalized=T), paste0(ndata_folder, project,"_ReNormalised.xlsx"), sep="\t", row.names=T, col.names=T, quote=F)
+write.table(symbols, paste0(project,"_GeneSymbols.txt"), sep="\t", row.names=T, col.names=T, quote=F)
+write.table(md, paste0(project,"_MetaData.txt"), sep="\t", row.names=T, col.names=T, quote=F)
+
+
+```
+
+PCA plot
+```{r}
+dir.create("plot_folder")
+plot_folder <- "plot_folder/"
+
+data2 <- plotPCA(rld, intgroup=c("Time","Tissue"), returnData=TRUE)
+percentVar <- round(100 * attr(data2, "percentVar"))
+ggplot(data2, aes(PC1, PC2, color=Tissue, shape=Time)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  scale_color_manual(values=c("#1b9e77","#d95f02","#7570b3","#e7298a","#66a61e"))
+
+ggsave('PCA', plot = last_plot(), device ="pdf", path = plot_folder, scale = 1,dpi = 300)
+
+dev.off() 
+```
+
+
+
+
+
+Volcano plot per tissue per time
+```{r}
+Tissues <- unique(as.character(md$Tissue))
+resdf <- read.delim(paste0(resdf_folder,"Wnt_Targets_RNA_seq_Tissue_Time_DifferentialExpresison.txt"), header =T)
+
+dir.create("plot_folder/volcanoplot_folder_6hr")
+volcanoplot_folder <- "plot_folder/volcanoplot_folder_6hr/"
+
+
+volcano_plot_tissue_time <- function(x){
+  for(i in "6"){ 
+    resdf_tissue <- resdf[,grep(x, colnames(resdf))]
+    data_tissue_time <- data.frame(symbol = resdf$SYMBOL, 
+                                   gene = row.names(resdf_tissue), 
+                                   padj = resdf_tissue[,paste("Tissue",x,".Time" ,i,"_padj",sep="")], 
+                                   pvalue = -log10(resdf_tissue[,paste("Tissue",x,".Time" ,i,"_pvalue",sep="")]), 
+                                   lfc = resdf_tissue[,paste("Tissue",x,".Time" ,i,"_log2FoldChange",sep="")])
+    data <- data_tissue_time
+    data <- na.omit(data)
+    
+    data <- data %>%
+      mutate(color = ifelse(data$lfc > 0 & data$pvalue > 1.3, 
+                            yes = "0h control", 
+                            no = ifelse(data$lfc < 0 & data$pvalue > 1.3, 
+                                        yes = "Withdrawel 6h", 
+                                        no = "none")))
+    
+    #top_labelled <- subset(data, abs(lfc) >= 1)
+    top_labelled2 <- top_n(subset(data, lfc >= 0.5 & padj <0.01), n = 10, wt = -log10(padj))
+    top_labelled2 <- rbind(top_labelled2, top_n(subset(data, lfc <= 0.5 & padj <0.01), n = 10, wt = -log10(padj)))
+    #top_labelled3 <- subset(data, (padj<0.01 & abs(lfc)>1))
+    
+    plot <- ggplot(data, aes(x = lfc, y = -log10(padj))) + 
+      geom_point(aes(color = factor(color)), size = 0.5, alpha = 0.8, na.rm = T) + # add gene points
+      theme_bw(base_size = 16) + # clean up theme
+      theme(legend.position = "none") + # remove legend 
+      #ggtitle(label = paste("Volcano Plot_",x,"_Time_",i, sep = ""), subtitle = paste("Withdrawal ",i,"h vs. 0h control", sep = "")) +  # add title
+      xlab(expression("log2FoldChange")) + # x-axis label
+      ylab(expression(-log[10]("padj"))) + # y-axis label
+      geom_vline(xintercept = 0, colour = "black") + # add line at 0
+      #geom_hline(yintercept = 1.3, colour = "black") + # p(0.05) = 1.3 +
+      scale_y_continuous(trans = "log1p") +
+      scale_color_manual(values = c("0h control" = "#636363", 
+                                    "Withdrawel 6h" = "#636363", 
+                                    "none" = "#636363")) +
+      geom_point(data = subset(data, lfc >= 0.5 & padj < 0.01), color = "red", size = 1.5, alpha = 1) +
+      geom_point(data = subset(data, lfc <= -0.5 & padj < 0.01), color = "#3182bd", size = 1.5, alpha = 1)  +
+      geom_point(data = subset(data, padj > 0.01), color = "grey", size = 0.5, alpha = 1)  +
+      geom_hline(yintercept = -log10(0.01), slope = F, color = "red", lty=2 ) +
+      geom_vline(xintercept = 0.5, slope = F, color = "green", lty=2 ) +
+      geom_vline(xintercept = -0.5, slope = F, color = "green", lty=2 ) +
+      geom_text_repel(data = top_labelled2, 
+                      mapping = aes(label = symbol), 
+                      size = 3,
+                      fontface = 'bold', 
+                      color = 'black',
+                      force = 1,
+                      box.padding = unit(0.5, "lines"),
+                      point.padding = unit(0.5, "lines")) + 
+      xlim(-7,7) +
+      ylim (0,130)
+    
+    
+    #ggsave(paste0(volcanoplot_folder,"volcano_",x,"Time_",i,".pdf", sep = ""),plot, width = 8, height = 8)
+    ggsave(paste0(volcanoplot_folder,"volcano_",x,"Time_",i,".png", sep = ""),plot, width = 4, height = 4)
+  }
+  
+} 
+
+lapply(Tissues, volcano_plot_tissue_time)
+
+
+dir.create("plot_folder/volcanoplot_folder_24hr")
+volcanoplot_folder <- "plot_folder/volcanoplot_folder_24hr/"
+
+
+volcano_plot_tissue_time <- function(x){
+  for(i in "24"){ 
+  resdf_tissue <- resdf[,grep(x, colnames(resdf))]
+  data_tissue_time <- data.frame(symbol = resdf$SYMBOL, 
+                                  gene = row.names(resdf_tissue), 
+                                  padj = resdf_tissue[,paste("Tissue",x,".Time" ,i,"_padj",sep="")], 
+                                  pvalue = -log10(resdf_tissue[,paste("Tissue",x,".Time" ,i,"_pvalue",sep="")]), 
+                                  lfc = resdf_tissue[,paste("Tissue",x,".Time" ,i,"_log2FoldChange",sep="")])
+  data <- data_tissue_time
+  data <- na.omit(data)
+  
+  data <- data %>%
+    mutate(color = ifelse(data$lfc > 0 & data$pvalue > 1.3, 
+                          yes = "0h control", 
+                          no = ifelse(data$lfc < 0 & data$pvalue > 1.3, 
+                                      yes = "Withdrawel 6h", 
+                                      no = "none")))
+ 
+  #top_labelled <- subset(data, abs(lfc) >= 1)
+  top_labelled2 <- top_n(subset(data, lfc >= 1 & padj <0.01), n = 10, wt = -log10(padj))
+  top_labelled2 <- rbind(top_labelled2, top_n(subset(data, lfc <= 1 & padj <0.01), n = 10, wt = -log10(padj)))
+  #top_labelled3 <- subset(data, (padj<0.01 & abs(lfc)>1))
+  
+  plot <- ggplot(data, aes(x = lfc, y = -log10(padj))) + 
+    geom_point(aes(color = factor(color)), size = 0.5, alpha = 0.8, na.rm = T) + # add gene points
+    theme_bw(base_size = 16) + # clean up theme
+    theme(legend.position = "none") + # remove legend 
+    #ggtitle(label = paste("Volcano Plot_",x,"_Time_",i, sep = ""), subtitle = paste("Withdrawal ",i,"h vs. 0h control", sep = "")) +  # add title
+    xlab(expression("log2FoldChange")) + # x-axis label
+    ylab(expression(-log[10]("padj"))) + # y-axis label
+    geom_vline(xintercept = 0, colour = "black") + # add line at 0
+    #geom_hline(yintercept = 1.3, colour = "black") + # p(0.05) = 1.3 +
+    scale_y_continuous(trans = "log1p") +
+    scale_color_manual(values = c("0h control" = "#636363", 
+                                  "Withdrawel 6h" = "#636363", 
+                                  "none" = "#636363")) +
+    geom_point(data = subset(data, lfc >= 1 & padj < 0.01), color = "red", size = 1.5, alpha = 1) +
+    geom_point(data = subset(data, lfc <= -1 & padj < 0.01), color = "#3182bd", size = 1.5, alpha = 1)  +
+    geom_point(data = subset(data, padj > 0.01), color = "grey", size = 0.5, alpha = 1)  +
+    geom_hline(yintercept = -log10(0.01), slope = F, color = "red", lty=2 ) +
+    geom_vline(xintercept = 1, slope = F, color = "green", lty=2 ) +
+    geom_vline(xintercept = -1, slope = F, color = "green", lty=2 ) +
+    geom_text_repel(data = top_labelled2, 
+                    mapping = aes(label = symbol), 
+                    size = 3,
+                    fontface = 'bold', 
+                    color = 'black',
+                    force = 1,
+                    box.padding = unit(0.5, "lines"),
+                    point.padding = unit(0.5, "lines")) + 
+    xlim(-7,7)
+
+  
+    #ggsave(paste0(volcanoplot_folder,"volcano_",x,"Time_",i,".pdf", sep = ""),plot, width = 8, height = 8)
+    ggsave(paste0(volcanoplot_folder,"volcano_",x,"Time_",i,".png", sep = ""),plot, width = 4, height = 4)
+  }
+  
+} 
+
+lapply(Tissues, volcano_plot_tissue_time)
+```
+
+Correlation plot samples
+
+```{r}
+# Correlation plot samples
+
+pdf(paste(plot_folder,title, comp, "cluster_heatmap.pdf"))
+
+# Define gradient color for continuous variable
+col = list(Tissue = c("Pancreas" = "#e78ac3", "Liver" = "#8da0cb", "Stomach" = "#a6d854", "Intestine" = "#fc8d62", "Colon" = "#66c2a5"),
+           Time = c("0" = "#fee6ce", "6" = "#fdae6b", "24" = "#e6550d"),
+           ind.n = c("1" = "#e5f5e0","2" = "#a1d99b", "3" = "#31a354"))
+
+
+#Make heatmap
+
+sampleDists <- dist(t(assay(rld)))
+sampleDistMatrix <- as.matrix(sampleDists)
+colors <- colorRampPalette( brewer.pal(9, "GnBu") )(255)
+df <- as.data.frame(colData(dds)[,c("Time","ind.n","Tissue")])
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows=sampleDists,
+         clustering_distance_cols=sampleDists,
+         col=colors,
+         annotation_col=df,
+         annotation_colors = col,
+         show_rownames = FALSE,
+         show_colnames = FALSE
+)
+
+dev.off()
+```
+
+#Make heatmap of specific set of genes 
+
+```{r}
+
+#ntd_interest <- ntd[rep(rownames(ntd)[1:10]),]
+common <- read.delim("genelist_common.txt", stringsAsFactors = FALSE)
+common_genes <- common[,"ENSEMBL"]
+ntd_interest <- ntd[common_genes,]
+df <- as.data.frame(colData(dds)[,c("Time","ind.n","Tissue")])
+
+pdf(paste(plot_folder,title, comp, "common_genes_heatmap_ENSEMB_gijs.pdf"))
+
+pheatmap(assay(ntd_interest), 
+         cluster_rows=T, 
+         show_rownames=T,
+         cluster_cols=T, 
+         annotation_col=df,
+         annotation_colors = col,
+         show_colnames = F,
+         annotation_names_row = T,
+         labels_row = paste0(symbols[rownames(symbols) %in% rownames(ntd_interest),] %>% pull(SYMBOL),"_", rownames(ntd_interest)),
+         scale = "row",
+         border_color = NA,
+         treeheight_row = 0,
+         cutree_cols = 2,
+         color = rev(colorRampPalette(brewer.pal(8, "PuOr"))(100))
+         )
+
+dev.off()
+
+
+```
+
+
+
+Extract resdf per tissue
+```{r}
+sink("sign_output_all2.txt")
+sink()
+
+
+extract_resdf_tissue <- function(x){
+  resdf_tissue <- resdf[,grep(x, colnames(resdf))]
+  write.table(resdf_tissue, paste(resdf_folder,"resdf_",x,".txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+  
+  for(i in c("6","24")){ 
+    if(i == "6"){
+      lfc <- 0.4} 
+    else{
+      lfc <- 1
+    }
+    resdf_tissue_clean <- resdf_tissue[!is.na(resdf_tissue[,paste("Tissue",x,".Time",i,"_padj",sep="")]),]
+    resdf_tissue_sig <- resdf_tissue_clean[resdf_tissue_clean[,paste("Tissue",x,".Time",i,"_padj",sep="")] < 0.01,]
+    write.table(resdf_tissue_sig, paste(resdf_folder,"resdf_",x,"_sig",i,".txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    resdf_tissue_sig_LFC <- resdf_tissue_sig[abs(resdf_tissue_sig[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")]) > lfc,]
+    write.table(resdf_tissue_sig_LFC, paste(resdf_folder,"resdf_",x,"_sig",i,"_LFC.txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    resdf_tissue_sig_downLFC <- resdf_tissue_sig[resdf_tissue_sig[,paste("Tissue",x,".Time" ,i,"_log2FoldChange",sep="")] < -lfc,]
+    write.table(resdf_tissue_sig_downLFC, paste(resdf_folder,"resdf_",x,"_sig",i,"_downLFC2.txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    resdf_tissue_sig_upLFC <- resdf_tissue_sig[resdf_tissue_sig[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")] > lfc,]
+    write.table(resdf_tissue_sig_upLFC, paste(resdf_folder,"resdf_",x,"_sig",i,"_upLFC2.txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    sink("sign_output_all.txt", append=TRUE)
+    cat(paste("Tissue:", x, ". Number of significant genes at",i,"hours:" ,length(abs(resdf_tissue_sig_LFC[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")]) > lfc)),"\n")
+    message(paste("Tissue:", x, ". Number of significant genes at",i,"hours:" ,length(abs(resdf_tissue_sig_LFC[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")]) > lfc)))
+    sink()
+  }
+}
+
+
+Tissues <- unique(as.character(md$Tissue))
+lapply(Tissues, extract_resdf_tissue)
+```
+
+
+Extract ndata per tissue
+```{r}
+
+ndata <- read.delim("ndata_folder/Wnt_Targets_RNA_seq_ReNormalised.txt", header = T)
+Tissues <- c("Col", "SI", "Li", "Pan", "Stom")
+
+extract_ndata_tissue <- function(x){
+  ndata_tissue <- ndata[,grep(x, colnames(ndata))]
+  write.table(ndata_tissue, paste(ndata_folder,"ndata_",x,".txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+} 
+
+lapply(Tissues, extract_ndata_tissue)
+
+```
+
+
+Load in resdf per tissue
+
+```{r}
+for (tissue in Tissues){
+        temp <- read.delim(paste0(resdf_folder, "resdf_", tissue,".txt"), header = T)
+        assign(paste0("resdf_", tissue), temp)
+} 
+```
+
+
+Select genes that are not sig up @ 6 and sig down @ 24h
+
+```{r}
+for (tissue in Tissues) {
+  a <- row.names(resdf)[intersect(which(resdf[,paste("Tissue",tissue,".Time24_padj",sep="")] < 0.01),    
+                                     which(resdf[,paste("Tissue",tissue,".Time24_log2FoldChange",sep="")] < -1))]
+  b <- row.names(resdf)[-intersect(which(resdf[,paste("Tissue",tissue,".Time6_padj",sep="")] < 0.01), 
+                                      which(resdf[,paste("Tissue",tissue,".Time6_log2FoldChange",sep="")] > 0))]
+  result <- intersect(a, b)
+  result2 <- resdf[which(rownames(resdf) %in% result),]
+  write.table(result2,paste0(resdf_folder, "resdf_",tissue,"_6notup_24down.txt"), sep = "\t", row.names = T,col.names=T,quote=F)
+}
+```
+
+Extract resdf for 6 and 24 hours for each tissue
+
+```{r}
+sink("sign_output_all.txt")
+sink()
+
+
+extract_resdf_tissue <- function(x){
+  resdf_tissue <- resdf[,grep(x, colnames(resdf))]
+  write.table(resdf_tissue, paste(resdf_folder,"resdf_",x,".txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+  
+  for(i in c("6","24")){ 
+      lfc <- 0 
+    resdf_tissue_clean <- resdf_tissue[!is.na(resdf_tissue[,paste("Tissue",x,".Time",i,"_padj",sep="")]),]
+    resdf_tissue_sig <- resdf_tissue_clean[resdf_tissue_clean[,paste("Tissue",x,".Time",i,"_padj",sep="")] < 0.01,]
+    write.table(resdf_tissue_sig, paste(resdf_folder,"resdf_",x,"_sig",i,".txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    resdf_tissue_sig_LFC <- resdf_tissue_sig[abs(resdf_tissue_sig[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")]) > lfc,]
+    write.table(resdf_tissue_sig_LFC, paste(resdf_folder,"resdf_",x,"_sig",i,"_LFC.txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    resdf_tissue_sig_downLFC <- resdf_tissue_sig[resdf_tissue_sig[,paste("Tissue",x,".Time" ,i,"_log2FoldChange",sep="")] < -lfc,]
+    write.table(resdf_tissue_sig_downLFC, paste(resdf_folder,"resdf_",x,"_sig",i,"_downLFC2.txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    resdf_tissue_sig_upLFC <- resdf_tissue_sig[resdf_tissue_sig[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")] > lfc,]
+    write.table(resdf_tissue_sig_upLFC, paste(resdf_folder,"resdf_",x,"_sig",i,"_upLFC2.txt",sep=""), sep="\t", row.names=T, col.names=T, quote=F)
+    sink("sign_output_all.txt", append=TRUE)
+    cat(paste("Tissue:", x, ". Number of significant genes at",i,"hours:" ,length(abs(resdf_tissue_sig_LFC[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")]) > lfc)),"\n")
+    message(paste("Tissue:", x, ". Number of significant genes at",i,"hours:" ,length(abs(resdf_tissue_sig_LFC[,paste("Tissue",x,".Time",i,"_log2FoldChange",sep="")]) > lfc)))
+    sink()
+  }
+}
+
+
+Tissues <- unique(as.character(md$Tissue))
+lapply(Tissues, extract_resdf_tissue)
+```
+
+
+At this point you use this link to do the venn diagram:
+
+http://bioinformatics.psb.ugent.be/webtools/Venn/
+
+Past in the gene lists in the website and extract the Venn diagram as JPG and SVG and the table with comparisons 
+
+Normalized data plot with and mean  and CI
+
+```{r}
+gather_data <- function(x){
+  
+  #set the right input in this block of code:
+  project <- "WNT_Targets_RNA_Seq"
+  norm2 <- read.table(paste0(ndata_folder,project,"_ReNormalised_2_old.txt"), header=T, sep='\t')
+  
+  #wrangle the data to get some search terms from the names, based on starts with xx for the tissue
+  # and the xxhr for the timepoints.
+  search_terms <- lapply(colnames(norm2)[c(3:length(colnames(norm2)))], function(x){
+    search_term <- substr(x, 0, 2)
+    search_term2 <- substr(x, nchar(x)-7, nchar(x)-4)
+    return(c(search_term, search_term2))
+  })
+  search_terms <- unique(search_terms)
+  
+  # gather the groups based on the search terms.
+  grouped_search_terms <- lapply(as.list(search_terms), function(x){
+    blah <- x
+    message(blah[2])
+    temp <- norm2[,which(startsWith(colnames(norm2), blah[1]))[which(which(startsWith(colnames(norm2), blah[1])) %in% grep(blah[2], colnames(norm2)))]] 
+    colnames(temp)
+    return(colnames(temp))
+  })
+  
+  # Gijs needed it in a data frame
+  table_gijs <- data.frame(norm2)
+  
+  # make a big list of data tables with the mean, CI and so forth, this function takes about 10 minutes...
+  all_data <- lapply(c(1:length(grouped_search_terms)), function(x){
+    #collect some data from the input data (put in a dataframe)
+    temp_table <- data.table(table_gijs[, c("X","SYMBOL", grouped_search_terms[[x]])])
+    temp_table$SYMBOL <- as.character(temp_table$SYMBOL)
+    #Remove all data rows that have NA at the SYMBOL column
+    #temp_table <- temp_table[-which(is.na(temp_table$SYMBOL)),]
+    #calculate the mean over the three different data points
+    test_2 <- temp_table[, .(Mean = rowMeans(temp_table[,c(3,4,5)]))]
+    #collect the search terms in 1 column for easy searching use.  
+    group_term <- paste(grouped_search_terms[[x]], collapse = ", ")
+    #put the data so far in a table to easily calculate the SD.
+    temp_table_2 <- data.table(SYMBOL = temp_table$SYMBOL, mean = test_2$Mean, N = 3, sd = rowSds(as.matrix(temp_table[,c(3,4,5)])), group = group_term)
+    #use the temporary table to calculate the confidence interval
+    CI_list <- 1.96*(temp_table_2$sd/(temp_table_2$N)^(1/2))
+    
+    
+    new_table <- data.table(ENSEMBL = temp_table$X, SYMBOL = temp_table_2$SYMBOL, mean = temp_table_2$mean, N = 3, sd = temp_table_2$sd, CI = CI_list,group = group_term)
+    return(new_table)
+  })
+  
+  #set all the data in one big table
+  all_data <- rbindlist(all_data)
+  
+  
+  #extract which tissue is in which group
+  colon_list <- which(startsWith(all_data$group, "Co"))
+  si_list <- which(startsWith(all_data$group, "SI"))
+  stom_list <- which(startsWith(all_data$group, "St"))
+  pan_list <- which(startsWith(all_data$group, "Pa"))
+  liv_list <- which(startsWith(all_data$group, "Li"))
+  
+  
+  # make a column to set the tissue right
+  all_data[, tissue := "tissue"]
+  
+  all_data$tissue[colon_list] <- "Colon"
+  all_data$tissue[si_list] <- "Intestine"
+  all_data$tissue[pan_list] <- "Pancreas"
+  all_data$tissue[liv_list] <- "Liver"
+  all_data$tissue[stom_list] <- "Stomach"
+
+  
+  #extract which timepoint is in which group
+  zero_hr_list <- grep(".0hr", all_data$group)
+  six_hr_list <- grep(".6hr", all_data$group)
+  twentyfour_hr_list <- grep(".24hr.", all_data$group)
+  
+  
+  # make a column to set the timepoints right
+  all_data[, time := "timepoint"]
+  
+  all_data$time[zero_hr_list] <- 0
+  all_data$time[six_hr_list] <- 6
+  all_data$time[twentyfour_hr_list] <- 24
+  all_data$time <- as.numeric(all_data$time)
+  return(all_data)}
+
+#Do this once for all the data:
+all_data <- gather_data(1)
+
+make_and_show_plot <- function(x){
+  GOI <- x
+  df_plot <- all_data[which(all_data$SYMBOL == GOI),]
+  
+  temp_plot <- ggplot(df_plot, aes(x=time, y=mean, group=tissue)) +
+                geom_ribbon(aes(ymin=mean-CI, ymax=mean+CI,  fill=tissue),
+                            alpha=0.4) +
+                ggtitle(GOI) +
+                theme_classic() + #theme with white background and black axis
+                xlab("Time (h)") +
+                scale_x_continuous(breaks = c(0,6,24)) +
+                ylab("Normalized reads") +
+                theme(plot.title = element_text(face="italic"), 
+                      axis.line = element_line(colour = "black", size = 1, linetype = "solid"),
+                      axis.ticks = element_line(colour = "black", size = 1),
+                      text = element_text(size=18),
+                      )+
+                      #legend.position='none') +
+                geom_point(aes(color=tissue, fill=tissue), size=4, shape=21)+
+                geom_line(aes(colour=tissue), linetype="dotted") + #option linetype dotted
+                scale_color_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))+
+                scale_fill_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))
+  
+temp_plot
+  
+   #ggsave(temp_plot, path = plot_folder, file=name_for_pdf, width = 14.8, height = 10.5, units = "cm") 
+  
+  #pdf(name_for_pdf, width=600, height=400, bg = "transparent")
+  
+}
+
+make_and_save_plot <- function(x){
+  GOI <- x
+  name_for_pdf <- paste0(GOI, "_figure_bene_gvs.pdf")
+  df_plot <- all_data[which(all_data$SYMBOL == GOI),]
+  
+  temp_plot <- ggplot(df_plot, aes(x=time, y=mean, group=tissue)) +
+                geom_ribbon(aes(ymin=mean-CI, ymax=mean+CI,  fill=tissue),
+                            alpha=0.4) +
+                ggtitle(GOI) +
+                theme_classic() + #theme with white background and black axis
+                xlab("Time (h)") +
+                scale_x_continuous(breaks = c(0,6,24)) +
+                ylab("Normalized reads") +
+                theme(plot.title = element_text(face="italic"), 
+                      axis.line = element_line(colour = "black", size = 1, linetype = "solid"),
+                      axis.ticks = element_line(colour = "black", size = 1),
+                      text = element_text(size=18),
+                      )+
+                      #legend.position='none') +
+                geom_point(aes(color=tissue, fill=tissue), size=4, shape=21)+
+                geom_line(aes(colour=tissue), linetype="dotted") + #option linetype dotted
+                scale_color_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))+
+                scale_fill_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))
+  
+  temp_plot
+  ggsave(temp_plot, path = plot_folder, file=name_for_pdf, width = 14.8, height = 10.5, units = "cm") 
+  
+  #pdf(name_for_pdf, width=600, height=400, bg = "transparent")
+  
+}
+
+make_and_show_plot("LGR5")
+
+
+
+
+```
+
+
+Perform analysis for specific gene
+
+```{r}
+GOI <- "PRPF40B"
+make_and_save_plot(GOI)
+```
+
+Make plot for a set of genes
+```{r}
+list_of_GOI <- common_per_tissue_df_2$SYMBOL
+list_of_GOI <-resdf_common_df2$SYMBOL
+list_of_GOI2 <- list("LGR5", "AXIN2", "ZNRF3","RNF43")
+list_of_GOI3 <- read.delim("genelist_common.txt", sep ="\t", stringsAsFactors = FALSE)
+list_of_GOI3 <- list_of_GOI3$ENSEMBL
+lapply(list_of_GOI3, make_and_save_plot_ENSEMBL)
+
+```
+
+Load gene list and make a plot
+
+```{r}
+genelist <- read.delim("genelist.txt", sep ="\t")
+list_of_GOI <- genelist$SYMBOL
+lapply(list_of_GOI[90:100], make_and_save_plot)
+```
+
+Make plot mean and CI per gene per tissue
+
+```{r}
+GOI <- "ZNRF3"
+TOI <- "Liver"
+
+
+df_plot <- all_data[all_data$SYMBOL == GOI, ]
+df_plot <- df_plot[df_plot$tissue == TOI,]
+plot <- ggplot(df_plot, aes(x=time, y=mean, group=tissue)) +
+  geom_ribbon(aes(ymin=mean-CI, ymax=mean+CI,  fill=tissue),
+              alpha=0.4) +
+  ggtitle(GOI) +
+  theme_classic() + #theme with white background and black axis
+  xlab("Time (h)") +
+  scale_x_continuous(breaks = c(0,6,24)) +
+  ylab("Normalized reads") +
+  theme(plot.title = element_text(face="italic")) +
+  geom_point(aes(color=tissue, fill=tissue), size=4, shape=21)+
+  geom_line(aes(colour=tissue), linetype="dotted") + #option linetype dotted
+  scale_color_manual(values=c("Colon" = "#66c2a5", "Intestine" = "#fc8d62", "Liver" = "#8da0cb","Colon" = "#e78ac3","Stomach" = "#a6d854")) +
+  scale_fill_manual(values=c("Colon" = "#66c2a5", "Intestine" = "#fc8d62", "Liver" = "#8da0cb","Colon" = "#e78ac3","Stomach" = "#a6d854")) #+
+  #theme(legend.position = "none")
+
+
+show(plot)
+
+```
+
+
+Normalized read plots with individual data points
+
+```{r}
+################ Load in additional data for the individual data points
+  
+  #set the right input in this block of code:
+  project <- "WNT_Targets_RNA_Seq"
+  norm2 <- read.table(paste0(ndata_folder,project,"_ReNormalised_2_old.txt"), header=T, sep='\t')
+
+
+   # Organize normalized data for the individual points
+  
+  df2 <- read.table("genelist_common.txt", header=T, sep='\t')
+  norm2 <- read.table(paste0(ndata_folder,project,"_ReNormalised_2_old.txt"), header=T, sep='\t')
+  rownames(norm2) <- norm2$X
+  symbols2 <- read.table(paste0(project,"_GeneSymbols.txt"), header=T, sep='\t')
+  md2 <- read.table(paste0(project,"_MetaData.txt"), header=T, sep='\t')
+  md2$Time <- factor(md2$Time)
+  md2$ind.n <- factor(md2$ind.n)
+  md2$Sample <- rownames(md2)
+  
+
+  # organize normalized data
+  dat <- gather(norm2, "Sample","count", 3:47)
+  dat <- dat %>% dplyr::rename("Genesymbol" = "X")
+  dat <- dat %>% left_join(md2, "Sample")
+  dat <-tibble(dat)
+  dat$Time <-as.numeric(as.character(dat$Time))
+
+  make_and_save_plot_revisions_new <- function(x){
+  GOI <- x
+  name_for_pdf <- paste0(GOI, "_figure_bene_gvs_ind_points.pdf")
+  temp_data <- dat %>% filter(SYMBOL == GOI)
+  temp_plot <- ggplot(NULL, aes(x=Time, y=count, group=Tissue)) +
+                geom_line(data = temp_data, aes(color=Tissue, group=Individual, linetype=ind.n)) + 
+                geom_point(data = temp_data, aes(color=Tissue, fill=Tissue), size=4, shape=21) +
+                ggtitle(paste0(GOI,"_",symbols %>% dplyr::filter(SYMBOL == GOI) %>% pull(ENSEMBL))) +
+                theme_classic() + #theme with white background and black axis
+                xlab("Time (h)") +
+                scale_x_continuous(breaks = c(0,6,24)) +
+                ylab("Normalized reads") +
+                theme(plot.title = element_text(face="italic"), 
+                      axis.line = element_line(colour = "black", size = 1, linetype = "solid"),
+                      axis.ticks = element_line(colour = "black", size = 1),
+                      text = element_text(size=18),
+                      )+
+                      #legend.position='none') +
+                scale_color_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))+
+                scale_fill_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))
+  temp_plot
+  
+  ggsave(temp_plot, path = plot_folder, file=name_for_pdf, width = 14.8, height = 10.5, units = "cm") 
+
+  }
+  
+  make_and_save_plot_revisions_new("HOXB8")
+
+  make_and_save_plot_revisions_new_ensembl <- function(x){
+  GOI <- x
+  name_for_pdf <- paste0(GOI, "_figure_bene_gvs_ind_points.pdf")
+  temp_data <- dat %>% filter(Genesymbol == GOI)
+  temp_plot <- ggplot(NULL, aes(x=Time, y=count, group=Tissue)) +
+                geom_line(data = temp_data, aes(color=Tissue, group=Individual, linetype=ind.n)) + 
+                geom_point(data = temp_data, aes(color=Tissue, fill=Tissue), size=4, shape=21) +
+                ggtitle(paste0(symbols %>% dplyr::filter(ENSEMBL == GOI) %>% pull(SYMBOL),"_",GOI)) +
+                theme_classic() + #theme with white background and black axis
+                xlab("Time (h)") +
+                scale_x_continuous(breaks = c(0,6,24)) +
+                ylab("Normalized reads") +
+                theme(plot.title = element_text(face="italic"), 
+                      axis.line = element_line(colour = "black", size = 1, linetype = "solid"),
+                      axis.ticks = element_line(colour = "black", size = 1),
+                      text = element_text(size=18),
+                      )+
+                      #legend.position='none') +
+                scale_color_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))+
+                scale_fill_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))
+  temp_plot
+  
+  ggsave(temp_plot, path = plot_folder, file=name_for_pdf, width = 14.8, height = 10.5, units = "cm") 
+
+  }
+  
+  make_and_save_plot_revisions_new_ensembl("ENSG00000229043")
+  
+list_of_GOI2 <- list("HOX8B","TBXAS1","SLC2A12","TMEM71","BFSP1","CTSF", "PXDN", "MIR27B","ACSF2")
+list_of_GOI3 <- read.delim("tissue_specificStomach_0624.txt", sep ="\t", stringsAsFactors = FALSE)
+list_of_GOI3 <- list_of_GOI3$SYMBOL
+lapply(list_of_GOI3, make_and_show_plot_revisions_new)
+lapply(list_of_GOI2, make_and_show_plot_revisions_new)
+
+  
+```
+
+Make plot for individual points with CI
+
+```{r}
+  make_and_save_plot_indpoints_CI <- function(x){
+  GOI <- x
+  name_for_pdf <- paste0(GOI, "_figure_bene_gvs_ind_points.pdf")
+  temp_data <- dat %>% filter(SYMBOL == GOI)
+  df_plot <- all_data[which(all_data$SYMBOL == GOI),]
+  df_plot <- df_plot %>% dplyr::rename("Tissue" = "tissue")
+  df_plot <- df_plot %>% dplyr::rename("Time" = "time")
+  df_plot <- df_plot %>% dplyr::rename("count" = "mean")
+   
+  temp_plot <- ggplot(NULL, aes(x=Time, y=count, group=Tissue)) +
+                geom_ribbon(data = df_plot, aes(ymin=count-CI, ymax=count+CI,  fill=Tissue), alpha=0.4) + 
+                geom_point(data = temp_data, aes(color=Tissue, fill=Tissue), size=4, shape=21) +
+                ggtitle(paste0(GOI,"_",symbols %>% dplyr::filter(SYMBOL == GOI) %>% pull(ENSEMBL))) +
+                theme_classic() + #theme with white background and black axis
+                xlab("Time (h)") +
+                scale_x_continuous(breaks = c(0,6,24)) +
+                ylab("Normalized reads") +
+                theme(plot.title = element_text(face="italic"), 
+                      axis.line = element_line(colour = "black", size = 1, linetype = "solid"),
+                      axis.ticks = element_line(colour = "black", size = 1),
+                      text = element_text(size=18),
+                      )+
+                      #legend.position='none') +
+                scale_color_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))+
+                scale_fill_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))
+  temp_plot
+  
+  #ggsave(temp_plot, path = plot_folder, file=name_for_pdf, width = 14.8, height = 10.5, units = "cm") 
+
+  }
+  
+  make_and_save_plot_indpoints_CI("LGR5")
+  
+
+```
+
+Make plot for individual points and mean with line and with CI
+
+```{r}
+   # Organize normalized data for the individual points
+  
+  df2 <- read.table("genelist_common.txt", header=T, sep='\t')
+  norm2 <- read.table(paste0(ndata_folder,project,"_ReNormalised_2_old.txt"), header=T, sep='\t')
+  rownames(norm2) <- norm2$X
+  symbols2 <- read.table(paste0(project,"_GeneSymbols.txt"), header=T, sep='\t')
+  md2 <- read.table(paste0(project,"_MetaData.txt"), header=T, sep='\t')
+  md2$Time <- factor(md2$Time)
+  md2$ind.n <- factor(md2$ind.n)
+  md2$Sample <- rownames(md2)
+  
+
+  # organize normalized data
+  dat <- gather(norm2, "Sample","count", 3:47)
+  dat <- dat %>% dplyr::rename("Genesymbol" = "X")
+  dat <- dat %>% left_join(md2, "Sample")
+  dat <-tibble(dat)
+  dat$Time <-as.numeric(as.character(dat$Time))
+
+make_and_save_plot_indpoints_CI_mean <- function(x){
+  GOI <- x
+  name_for_pdf <- paste0(symbols %>% dplyr::filter(ENSEMBL == GOI) %>% pull(SYMBOL), "_ind_points_meanline_CI.pdf")
+  temp_data <- dat %>% filter(Genesymbol == GOI)
+  df_plot <- all_data[which(all_data$ENSEMBL == GOI),]
+  df_plot <- df_plot %>% dplyr::rename("Tissue" = "tissue")
+  df_plot <- df_plot %>% dplyr::rename("Time" = "time")
+  df_plot <- df_plot %>% dplyr::rename("count" = "mean")
+   
+  temp_plot <- ggplot(NULL, aes(x=Time, y=count, group=Tissue)) +
+                geom_ribbon(data = df_plot, aes(ymin=count-CI, ymax=count+CI,  fill=Tissue), alpha=0.4) + 
+                geom_point(data = temp_data, aes(color=Tissue, fill=Tissue), size=3, shape=21) +
+                #geom_point(data = df_plot, aes(color=Tissue, fill=Tissue), size=4, shape=22) +
+                geom_line(data = df_plot, aes(colour=Tissue), linetype="dotted", size=1) +
+                ggtitle(paste0(GOI,"_",symbols %>% dplyr::filter(ENSEMBL == GOI) %>% pull(SYMBOL))) +
+                theme_classic() + #theme with white background and black axis
+                xlab("Time (h)") +
+                scale_x_continuous(breaks = c(0,6,24)) +
+                ylab("Normalized reads") +
+                theme(plot.title = element_text(face="italic"), 
+                      axis.line = element_line(colour = "black", size = 1, linetype = "solid"),
+                      axis.ticks = element_line(colour = "black", size = 1),
+                      text = element_text(size=18),
+                      )+
+                      #legend.position='none') +
+                scale_color_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))+
+                scale_fill_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))
+  temp_plot
+  
+  ggsave(temp_plot, path = plot_folder, file=name_for_pdf, width = 14.8, height = 10.5, units = "cm") 
+
+  }
+  
+  make_and_save_plot_indpoints_CI_mean("ENSG00000229043")
+  genelist <- read.delim("genelist_plots.txt", sep ="\t")
+  list_of_GOI <- genelist$ENSEMBL
+  lapply(list_of_GOI, make_and_save_plot_indpoints_CI_mean)
+  
+  
+```
+
+
+Gijs script om singnificantie te testen op tijdpunt 0 6 of 24 hours based on genelist
+
+```{r}
+#Here is the math for the t-tests!
+
+t.test2 <- function(m1,m2,s1,s2,n1,n2,m0=0,equal.variance=FALSE){
+  if( equal.variance==FALSE ) 
+  {
+    se <- sqrt( (s1^2/n1) + (s2^2/n2) )
+    # welch-satterthwaite df
+    df <- ( (s1^2/n1 + s2^2/n2)^2 )/( (s1^2/n1)^2/(n1-1) + (s2^2/n2)^2/(n2-1) )
+  } else
+  {
+    # pooled standard deviation, scaled by the sample sizes
+    se <- sqrt( (1/n1 + 1/n2) * ((n1-1)*s1^2 + (n2-1)*s2^2)/(n1+n2-2) ) 
+    df <- n1+n2-2
+  }      
+  t <- (m1-m2-m0)/se 
+  dat <- c(m1-m2, se, t, 2*pt(-abs(t),df))    
+  names(dat) <- c("Difference of means", "Std Error", "t", "p-value")
+  return(dat) 
+}
+
+
+
+make_pvalues <- function(GOI, tissue_df){
+  tissue_df <- tissue_df
+  
+  #if(GOI %in% all_data$SYMBOL){
+  temp1 <- all_data[which(all_data$ENSEMBL == GOI),]
+  #else{message("geneSYMBOL not in all_data")}
+  
+  if(all(temp1$mean>0 && nrow(temp1) > 0)){
+  message(paste("TRUE"))
+  times <- unique(temp1$time)
+  for (time in times) {
+    assign(paste0("test_", time), FALSE)
+  }
+for (time in unique(temp1$time)) {
+  time_df <- time
+pvalues <- lapply(unique(temp1$tissue), function(x){
+  p_value <- t.test2(as.numeric(temp1[intersect(which(temp1$time == time_df),grep(tissue_df, temp1$tissue)),"mean"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df),grep(x, temp1$tissue)),"mean"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df),grep(tissue_df, temp1$tissue)),"sd"]),
+                     as.numeric(temp1[intersect(which(temp1$time == time_df),grep(x, temp1$tissue)),"sd"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df), grep(tissue_df, temp1$tissue)), "N"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df), grep(x, temp1$tissue)), "N"])
+  )
+  p_value <- as.numeric(p_value['p-value'])
+  name <- paste(tissue_df, "vs", x)
+  return(c(name, p_value))})
+  pval <- unlist(lapply(pvalues, function(x){return(x[2])}))
+  if(all(pval[-which(pval == 1)] < 0.05)){
+  assign(paste0("test_" , time), TRUE)
+  message(paste0(" pvalues_", time, "_", GOI))}
+  else{
+    message(paste0("pvalues_", time, "_", GOI, "larger than 0.05"))
+  }}
+  return(GOI = c(test_0, test_6, test_24))
+}
+else{
+      message(paste0("warning: no pvalue will be calculated for_",GOI))
+      return(GOI = c(FALSE, FALSE, FALSE))
+}
+}
+
+
+```
+
+Make p_values_2 tissues
+```{r}
+make_pvalues_2 <- function(GOI, tissue_df1, compare_to_tissues){
+ # GOI <- "ENSG00000000460"
+  tissue_df1 <- tissue_df1 #"Intestine"
+  compare_to_tissues <-compare_to_tissues #c("Colon","Intestine","Pancreas") 
+  
+  #if(GOI %in% all_data$SYMBOL){
+  temp1 <- all_data[which(all_data$ENSEMBL == GOI),]
+  #else{message("geneSYMBOL not in all_data")}
+  
+  if(all(temp1$mean>0 && nrow(temp1) > 0)){
+  message(paste("TRUE"))
+  times <- unique(temp1$time)
+  for (time in times) {
+    assign(paste0("test_", time), FALSE)
+  }
+for (time in unique(temp1$time)) {
+  time_df <- time
+pvalues <- lapply(c(tissue_df1,compare_to_tissues), function(x){
+  p_value <- t.test2(as.numeric(temp1[intersect(which(temp1$time == time_df),grep(tissue_df1, temp1$tissue)),"mean"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df),grep(x, temp1$tissue)),"mean"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df),grep(tissue_df1, temp1$tissue)),"sd"]),
+                     as.numeric(temp1[intersect(which(temp1$time == time_df),grep(x, temp1$tissue)),"sd"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df), grep(tissue_df1, temp1$tissue)), "N"]), 
+                     as.numeric(temp1[intersect(which(temp1$time == time_df), grep(x, temp1$tissue)), "N"])
+  )
+  p_value <- as.numeric(p_value['p-value'])
+  name <- paste(tissue_df1, "vs", x)
+  return(c(name, p_value))})
+  pval <- unlist(lapply(pvalues, function(x){return(x[2])}))
+ if(all(pval[-which(pval == 1)] < 0.05)){
+  assign(paste0("test_" , time), TRUE)
+  message(paste0(" pvalues_", time, "_", GOI))}
+  else{
+    message(paste0("pvalues_", time, "_", GOI, "larger than 0.05"))
+  }}
+  return(GOI = c(test_0, test_6, test_24))
+}
+else{
+      message(paste0("warning: no pvalue will be calculated for_",GOI))
+      return(GOI = c(FALSE, FALSE, FALSE))
+}
+}
+```
+
+Uitvoeren p_values_2
+
+```{r}
+genlijst <- read.delim("pancreas_liver_stomach_specific.txt", sep ="\t", stringsAsFactors = FALSE)
+#genlijst <- genlijst[genlijst$SYMBOL != "",]
+genlijst <- genlijst$ENSEMBL
+length(unique(genlijst))
+#genlijst = make.names(genlijst)
+#genlijst <- !is.na(genlijst)
+
+#genlijst <- c("LGR5", "SP5")
+
+pvalues <- lapply(unique(genlijst), function(x){
+  t <- make_pvalues_2(x, "Stomach",c("Colon","Intestine"))
+  return(t)
+  })
+names(pvalues) <- unique(genlijst)
+
+hr_0 <- lapply(pvalues, function(x){
+  if(x[1]){
+    return(TRUE)
+  }
+  else{return(FALSE)}
+})
+
+#Liver_significant_at_0 <- names(hr_0)[unlist(hr_0)]
+#Pancreas_significant_at_0 <- names(hr_0)[unlist(hr_0)]
+Stomach_significant_at_0 <- names(hr_0)[unlist(hr_0)]
+
+length(Colon_significant_at_0)
+length(Intestine_significant_at_0)
+
+
+Liver_Pancreas_Stomach_significant_at_0 <- intersect(Liver_significant_at_0,Pancreas_significant_at_0)
+Liver_Pancreas_Stomach_significant_at_0<- intersect(Liver_Pancreas_Stomach_significant_at_0,Stomach_significant_at_0)
+Liver_Pancreas_Stomach_significant_at_0_unique <- unique(c(Liver_significant_at_0,Pancreas_significant_at_0,Stomach_significant_at_0))
+
+lapply(Liver_Pancreas_Stomach_significant_at_0_unique, make_and_save_plot_ENSEMBL)
+
+```
+
+
+Wanneer je het wilt uitvoeren
+
+```{r}
+
+genlijst <- read.delim("colon_intestine_specific.txt", sep ="\t", stringsAsFactors = FALSE)
+#genlijst <- genlijst[genlijst$SYMBOL != "",]
+genlijst <- genlijst$ENSEMBL
+length(unique(genlijst))
+#genlijst = make.names(genlijst)
+#genlijst <- !is.na(genlijst)
+
+#genlijst <- c("LGR5", "SP5")
+
+pvalues <- lapply(unique(genlijst), function(x){
+  t <- make_pvalues(x, "Intestine")
+  return(t)
+  })
+names(pvalues) <- unique(genlijst)
+
+
+#Next step filter op 0 signi [1] 6 sig [2] of 24 sig [3]
+
+# 0 hours different
+
+hr_0 <- lapply(pvalues, function(x){
+  if(x[1]){
+    return(TRUE)
+  }
+  else{return(FALSE)}
+})
+
+significant_at_0 <- names(hr_0)[unlist(hr_0)]
+length(significant_at_0)
+
+significant_at_0_symbols <- symbols[rownames(symbols) %in% significant_at_0,] %>% pull(SYMBOL)
+
+write.table(symbols[rownames(symbols) %in% significant_at_0,],paste0("tissue_specific","Stomach","_0.txt"), sep = "\t", row.names = T,col.names=T,quote=F)
+
+lapply(significant_at_0, make_and_save_plot_ENSEMBL)
+
+# 6 hours different
+
+hr_6 <- lapply(pvalues, function(x){
+  if(x[2]){
+    return(TRUE)
+  }
+  else{return(FALSE)}
+})
+
+significant_at_6 <- names(hr_6)[unlist(hr_6)]
+
+significant_at_6_symbols <- symbols[rownames(symbols) %in% significant_at_6,] %>% pull(SYMBOL)
+
+write.table(symbols[rownames(symbols) %in% significant_at_6,],paste0("tissue_specific","Stomach","_6.txt"), sep = "\t", row.names = T,col.names=T,quote=F)
+
+lapply(significant_at_6, make_and_save_plot_ENSEMBL)
+
+#lapply(significant_at_6, make_and_save_plot)
+
+# 24 hour different
+
+hr_24 <- lapply(pvalues, function(x){
+  if(x[2]){
+    return(TRUE)
+  }
+  else{return(FALSE)}
+})
+
+significant_at_24 <- names(hr_24)[unlist(hr_24)]
+
+significant_at_24_symbols <- symbols[rownames(symbols) %in% significant_at_24,] %>% pull(SYMBOL)
+
+write.table(symbols[rownames(symbols) %in% significant_at_24,],paste0("tissue_specific","Stomach","_24.txt"), sep = "\t", row.names = T,col.names=T,quote=F)
+
+
+lapply(significant_at_24, make_and_save_plot_ENSEMBL)
+
+unique_24 <- setdiff(significant_at_6,significant_at_0)
+
+all_genes <- unique(c(significant_at_0,significant_at_6,significant_at_24))
+
+write.table(symbols[rownames(symbols) %in% all_genes,],paste0("tissue_specific","Stomach","_0624.txt"), sep = "\t", row.names = T,col.names=T,quote=F)
+
+```
+
+
+UpSet plot load package
+```{r}
+install.packages("UpSetR")
+
+library("UpSetR")
+```
+
+Run UpSet plot
+
+```{r}
+#read info from computer
+
+Colon <- read.delim(paste0(resdf_folder,"Colon_6notup_24down_1.txt"), header =T)
+Intestine <- read.delim(paste0(resdf_folder,"Intestine_6notup_24down_1.txt"), header =T)
+Liver <- read.delim(paste0(resdf_folder,"Liver_6notup_24down_1.txt"), header =T)
+Pancreas <- read.delim(paste0(resdf_folder,"Pancreas_6notup_24down_1.txt"), header =T)
+Stomach <- read.delim(paste0(resdf_folder,"Stomach_6notup_24down_1.txt"), header =T)
+resdf <- read.delim(paste0(resdf_folder,"Wnt_Targets_RNA_seq_Tissue_Time_DifferentialExpresison.txt"), header =T)
+
+#Merge data into one data.frame
+
+full <- full_join(Colon, Intestine, by = "X") 
+full <- full_join(full, Liver, by = "X") 
+full <- full_join(full, Pancreas, by = "X")
+full <- full_join(full, Stomach, by = "X") 
+
+full <- full[,c("X", "Colon", "Intestine", "Liver", "Pancreas", "Stomach")]
+
+test <- full
+
+test[is.na(test)] <- 0
+
+pdf(file="upset_6notup_24down.pdf", onefile=FALSE) # or other device
+
+
+upset(test, sets = c("Liver", "Colon", "Intestine", "Stomach", "Pancreas"), sets.bar.color = "black",
+      order.by = "degree", empty.intersections = "on", decreasing = F)
+
+dev.off()
+
+
+#ggsave(p, path = plot_folder, file="upset_6notup_24down.pdf", width = 14.8, height = 10.5, units = "cm")
+
+```
+
+
+Make boxplot and line plots for the common genes
+```{r}
+# Make plots
+
+# READ DATA
+df2 <- read.table("genelist_common.txt", header=T, sep='\t')
+norm2 <- read.table(paste0(ndata_folder,project,"_ReNormalised_2_old.txt"), header=T, sep='\t')
+rownames(norm2) <- norm2$X
+symbols2 <- read.table(paste0(project,"_GeneSymbols.txt"), header=T, sep='\t')
+md2 <- read.table(paste0(project,"_MetaData.txt"), header=T, sep='\t')
+md2$Time <- factor(md2$Time)
+md2$ind.n <- factor(md2$ind.n)
+
+# MUNCH DATA
+rownames(df2) <- df2$ENSEMBL
+
+pdf(file="GENEPLOTS_normalisedcounts_2020_April.pdf", width=4, height=4, pointsize=10)
+dir.create("geneplots_folder")
+
+#library(ggplot2)
+
+for (i in rownames(df2)) {
+  #GATHER RELAVANT DATA
+  dat <- norm2[i,]
+  toplot <- data.frame(count=as.numeric(dat))
+  rownames(toplot) <- names(dat)
+  
+  total <- merge(toplot, md2, by="row.names")
+  genename <- paste0(i, " - ", symbols2[i,]$SYMBOL)
+  
+  # LOG GENE BEING PROCESSED
+  print(genename)
+  
+  # MAKE BOXPLOT
+  bplot <- ggplot(total, aes(Time, count)) + geom_boxplot( aes(fill=Tissue), outlier.size=.01) + 
+    geom_point(aes(group=Tissue), position=position_dodge(width=0.75), size =3) + 
+    expand_limits(y = 0) +
+    ggtitle(genename) + 
+    facet_wrap( ~ Tissue, nrow=1) + ylab("Normalised count") +
+    theme(text = element_text(size = 30)) +
+    theme_bw() +
+    scale_color_manual(values=c("#1b9e77","#d95f02","#7570b3","#e7298a","#66a61e")) +
+    scale_fill_manual(values=c("#66c2a5","#fc8d62","#8da0cb","#e78ac3","#a6d854"))
+  print(bplot)
+  
+  #Save single plots by allowing the next 3 lines
+  
+  aspect_ratio <- 0.75
+  height <- 4
+  ggsave(paste("geneplots_folder/","boxplot2_", genename, ".pdf"), device = "pdf", bplot, height = 7 , width = 7 * aspect_ratio)
+  
+  
+  # MAKE LINEPLOT
+  lplot <- ggplot(total, aes(Time, count)) + geom_line( aes(color=Tissue, group=Individual, linetype=ind.n)) + 
+    geom_point(aes(color=Tissue, shape=ind.n), alpha=.8) + 
+    scale_y_log10(breaks = scales::trans_breaks("log10", function(x) 10^x),
+                  labels = scales::trans_format("log10", scales::math_format(10^.x))) +
+    ggtitle(genename) + 
+    facet_wrap( ~ Tissue, nrow=1)  + ylab("Log10(Normalised count)") +
+    theme(text = element_text(size = 10)) +
+    theme_bw() +
+    scale_color_manual(values=c("#1b9e77","#d95f02","#7570b3","#e7298a","#66a61e"))
+  print(lplot)
+  
+  # Save single plots by allowing the next 3 lines
+  
+  aspect_ratio <- 0.5
+  height <- 5
+  ggsave(paste("geneplots_folder/","lplot_", genename, ".pdf"), device = "pdf", lplot, height = 7 , width = 7 * aspect_ratio)
+  
+}
+dev.off()
+
+```
+
+log fold change graph per gene
+```{r}
+d <- read_xlsx("data_LFC/ZNRF3_2020april.xlsx")
+d <- gather(d, "Time","L2FC", 2:3) %>% mutate(Time = as.integer(Time))
+
+p <- ggplot(d, aes(x=Time, Y=L2FC, group= Tissue, colour = Tissue)) +
+      geom_line(aes(y=L2FC, group = Tissue), lwd=1) +
+      scale_colour_manual(values = c("#1b9e77","#d95f02","#7570b3","#e7298a","#66a61e")) +
+      theme_bw() +
+      scale_x_continuous(limits = c(0,30), breaks = c(6, 24)) +
+      scale_y_continuous(limits = c(-7,1), breaks = c(-1,-2,-3,-4,-5,-6,-7))
+p
+
+ggsave(p, path = plot_folder, file="ZNRF3_L2FC_A6.pdf", width = 10.5, height = 14.8, units = "cm")
+```
+
+Extract common genes resdf
+```{r}
+resdf <- read.delim(paste0(resdf_folder,"Wnt_Targets_RNA_seq_Tissue_Time_DifferentialExpresison.txt"), header =T)
+common <- read.delim("genelist_common.txt")
+resdf_common <- resdf[which(rownames(resdf)%in% common$ENSEMBL),]
+write.table(resdf_common,paste0("resdf_common_dec2020.txt"), sep = "\t", row.names = T,col.names=T,quote=F)
+
+```
+
+Next step is to calculate L2FC SD SEM per tissue and time in excell and shape it into common_LFC_per_tissue_per time
+
+L2FC plotted per tissue for a set of genes
+
+```{r}
+averaged_data <- read_xlsx("data_LFC/common_LFC_per_tissue_per_time.xlsx", col_names = T)
+
+plot <- averaged_data %>% 
+          ggplot(aes(x=Time, y=L2FC, colour = Tissue))+
+          geom_point(size=5) +
+          geom_line(lwd=2)+
+          geom_errorbar(aes(ymin=L2FC-sem, ymax=L2FC+sem), width = 0.2, lwd=1) +
+          scale_color_manual(values=c("#1b9e77","#d95f02","#7570b3","#e7298a","#66a61e")) +
+          theme_bw() +
+          scale_x_continuous(limits = c(0,30), breaks = c(6, 24)) +
+          scale_y_continuous(limits = c(-2.5,-0), breaks = c(-0.5,-1)) 
+#+
+#  theme(legend.position = "none")
+
+ggsave(plot, path = plot_folder, file="common_L2FC_A6.pdf", width = 10.5, height = 14.8, units = "cm")
+
+```
+
+L2FC plotted for all sign downregulated genes
+
+```{r}
+averaged_data <- read_xlsx("data_LFC/down_sign_LFC_per_tissue_per_time.xlsx", col_names = T)
+
+plot2 <- averaged_data %>% 
+          ggplot(aes(x=Time, y=L2FC, colour = Tissue))+
+          geom_point(size=5) +
+          geom_line(lwd=2)+
+          geom_errorbar(aes(ymin=L2FC-sem, ymax=L2FC+sem), width = 0.2, lwd=1) +
+          scale_color_manual(values=c("#1b9e77","#d95f02","#7570b3","#e7298a","#66a61e")) +
+          theme_bw() +
+          scale_x_continuous(limits = c(0,30), breaks = c(6, 24)) +
+          scale_y_continuous(limits = c(-2.5,-0), breaks = c(-0.5,-1)) 
+#+
+#  theme(legend.position = "none")
+
+ggsave(plot2, path = plot_folder, file="down_sign_L2FC_A6.pdf", width = 10.5, height = 14.8, units = "cm")
+```
+
+Make histogram per tissue for the significant genes
+
+```{r}
+#Color codes
+ Col_Colon = "#1b9e77"
+ Col_Intestine = "#d95f02"
+ Col_Liver = "#7570b3"
+ Col_Pancreas = "#e7298a"
+ Col_Stomach ="#66a61e"
+
+#Down here, change the tissue to the tissue that you want and make the plots for each tissue
+ 
+# Read in data
+
+significant_data_6 <- read.delim("resdf_folder/resdf_Stomach_sig6.txt", header = TRUE)
+significant_data_24 <- read.delim("resdf_folder/resdf_Stomach_sig24.txt", header = TRUE)
+
+# Make histogram - This works! 
+
+phisto <- ggplot() +
+            geom_histogram(aes(significant_data_6$TissueStomach.Time6_log2FoldChange), bins = 100, fill = Col_Stomach, alpha = 0.4) +
+            geom_histogram(aes(significant_data_24$TissueStomach.Time24_log2FoldChange), bins = 100, fill = "grey", alpha = 0.4) +
+            labs(title= "Significantly changed genes in Stomach", y="Frequency", x = "L2FC") +
+            theme_bw() +
+            scale_x_continuous(limits = c(-7.5,7.5), breaks = c(-7.5,-5,-2.5, 2.5,5,7.5)) +
+            scale_y_continuous(limits = c(0,600))
+
+ggsave(phisto, path = plot_folder, file="histogram_Stomach_A6.pdf", width = 10.5, height = 14.8, units = "cm")
+
+
+
+
+```
+
+Stacked barplot per tissue total genes and selected genes
+
+```{r}
+#Load in data set
+data <-read_xlsx("data_unique_vs_not_per_tissue.xlsx", col_names = TRUE)
+
+# Run stacked bar blot
+
+stacked <- ggplot(data, aes(fill=Condition, y=Value, x=Tissue)) + 
+              geom_bar(position="Fill", stat="identity") + #Ipv FILL = percentage kan je ook "Stack" doen voor absolute waardes
+              ggtitle("Uniquely expressed genes per tissue") +
+              xlab("") + theme_bw()
+
+ggsave(stacked, path = plot_folder, file="unique_tissue_stacked_A6.pdf", width =14.8 , height = 10.5, units = "cm")
+
+
+```
+
